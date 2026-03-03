@@ -8,13 +8,15 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.error(err));
+  .catch(err => console.error("MongoDB Error:", err));
 
+// Schema
 const registrationSchema = new mongoose.Schema({
   name: String,
-  email: String,
+  email: { type: String, unique: true },
   projectTitle: String,
   productionDate: String,
   trailerLink: String,
@@ -26,7 +28,7 @@ const registrationSchema = new mongoose.Schema({
 
 const Registration = mongoose.model("Registration", registrationSchema);
 
-// 🔥 Change Stream
+// 🔥 Change Stream (Real-time sync)
 Registration.watch().on("change", async (change) => {
   try {
 
@@ -46,19 +48,12 @@ Registration.watch().on("change", async (change) => {
       });
     }
 
-    else if (change.operationType === "delete") {
-      // Need email before delete
-      // So we fetch from change stream's documentKey? Not possible.
-      // Therefore we store email before delete OR handle differently.
-      console.log("Delete detected — email required for sheet removal");
-    }
-
   } catch (err) {
     console.error("Sync error:", err.message);
   }
 });
 
-// API Routes
+// CREATE
 app.post("/register", async (req, res) => {
   try {
     const registration = await Registration.create(req.body);
@@ -68,6 +63,7 @@ app.post("/register", async (req, res) => {
   }
 });
 
+// UPDATE
 app.put("/update/:id", async (req, res) => {
   try {
     const updated = await Registration.findByIdAndUpdate(
@@ -81,6 +77,7 @@ app.put("/update/:id", async (req, res) => {
   }
 });
 
+// DELETE (important: send email before deletion)
 app.delete("/delete/:id", async (req, res) => {
   try {
     const doc = await Registration.findById(req.params.id);
@@ -93,6 +90,23 @@ app.delete("/delete/:id", async (req, res) => {
     await Registration.findByIdAndDelete(req.params.id);
 
     res.json({ message: "Deleted & synced" });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 🔄 FULL RESYNC
+app.get("/resync", async (req, res) => {
+  try {
+    const allData = await Registration.find();
+
+    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
+      type: "resync",
+      data: allData
+    });
+
+    res.json({ message: "Sheet fully resynced" });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
