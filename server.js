@@ -17,34 +17,40 @@ const registrationSchema = new mongoose.Schema({
   email: String,
   projectTitle: String,
   productionDate: String,
+  trailerLink: String,
+  fullFilmLink: String,
   cast: String,
-  producer: String
+  producer: String,
+  directorsByte: String
 }, { timestamps: true });
 
 const Registration = mongoose.model("Registration", registrationSchema);
 
-// 🔥 Real-time Change Stream
+// 🔥 Change Stream
 Registration.watch().on("change", async (change) => {
   try {
-    if (change.operationType === "insert") {
-      const doc = change.fullDocument;
 
+    if (change.operationType === "insert") {
       await axios.post(process.env.GOOGLE_SCRIPT_URL, {
         type: "insert",
-        data: doc
+        data: change.fullDocument
       });
+    }
 
-      console.log("Inserted & synced");
-
-    } else if (change.operationType === "update") {
+    else if (change.operationType === "update") {
       const updatedDoc = await Registration.findById(change.documentKey._id);
 
       await axios.post(process.env.GOOGLE_SCRIPT_URL, {
         type: "update",
         data: updatedDoc
       });
+    }
 
-      console.log("Updated & synced");
+    else if (change.operationType === "delete") {
+      // Need email before delete
+      // So we fetch from change stream's documentKey? Not possible.
+      // Therefore we store email before delete OR handle differently.
+      console.log("Delete detected — email required for sheet removal");
     }
 
   } catch (err) {
@@ -52,12 +58,11 @@ Registration.watch().on("change", async (change) => {
   }
 });
 
-// Normal API
+// API Routes
 app.post("/register", async (req, res) => {
   try {
-    const registration = new Registration(req.body);
-    await registration.save();
-    res.json({ message: "Saved" });
+    const registration = await Registration.create(req.body);
+    res.json(registration);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -71,6 +76,24 @@ app.put("/update/:id", async (req, res) => {
       { new: true }
     );
     res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/delete/:id", async (req, res) => {
+  try {
+    const doc = await Registration.findById(req.params.id);
+
+    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
+      type: "delete",
+      email: doc.email
+    });
+
+    await Registration.findByIdAndDelete(req.params.id);
+
+    res.json({ message: "Deleted & synced" });
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
