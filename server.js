@@ -8,19 +8,16 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ===============================
+// ==========================
 // MongoDB Connection
-// ===============================
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log("MongoDB Connected"))
-.catch(err => console.error("MongoDB Error:", err));
+// ==========================
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.error("MongoDB Error:", err));
 
-// ===============================
+// ==========================
 // Schema
-// ===============================
+// ==========================
 const registrationSchema = new mongoose.Schema({
   name: String,
   email: { type: String, unique: true },
@@ -35,52 +32,77 @@ const registrationSchema = new mongoose.Schema({
 
 const Registration = mongoose.model("Registration", registrationSchema);
 
-// ===============================
-// GOOGLE SHEET SYNC FUNCTION
-// ===============================
-async function syncToSheet(type, data) {
+// ==========================
+// Sync Function
+// ==========================
+async function syncToSheet(type, payload) {
   try {
-    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
-      type,
-      data
-    });
+    await axios.post(process.env.GOOGLE_SCRIPT_URL, payload);
     console.log("Synced:", type);
   } catch (err) {
     console.error("Sheet Sync Error:", err.message);
   }
 }
 
-// ===============================
-// CHANGE STREAM (AUTO UPDATE)
-// ===============================
+// ==========================
+// Change Stream (Auto Update)
+// ==========================
 function startChangeStream() {
+
   Registration.watch([], { fullDocument: "updateLookup" })
   .on("change", async (change) => {
 
     console.log("Change detected:", change.operationType);
 
     if (change.operationType === "insert") {
-      await syncToSheet("insert", change.fullDocument);
+      await syncToSheet("insert", {
+        type: "insert",
+        data: change.fullDocument
+      });
     }
 
     if (change.operationType === "update") {
-      await syncToSheet("update", change.fullDocument);
+      await syncToSheet("update", {
+        type: "update",
+        data: change.fullDocument
+      });
     }
 
   })
   .on("error", (err) => {
     console.error("Change Stream Error:", err);
-    setTimeout(startChangeStream, 5000); // Auto-reconnect
+    setTimeout(startChangeStream, 5000); // Auto reconnect
   });
 }
 
 startChangeStream();
 
-// ===============================
-// ROUTES
-// ===============================
+// ==========================
+// Initial Full Resync (Auto)
+// ==========================
+async function initialResync() {
+  try {
+    const allData = await Registration.find();
 
-// CREATE
+    await syncToSheet("resync", {
+      type: "resync",
+      data: allData
+    });
+
+    console.log("Initial full resync completed");
+
+  } catch (err) {
+    console.error("Initial resync error:", err.message);
+  }
+}
+
+initialResync();
+
+// ==========================
+// Routes
+// ==========================
+
+// Create
 app.post("/register", async (req, res) => {
   try {
     const doc = await Registration.create(req.body);
@@ -90,7 +112,7 @@ app.post("/register", async (req, res) => {
   }
 });
 
-// UPDATE
+// Update
 app.put("/update/:id", async (req, res) => {
   try {
     const updated = await Registration.findByIdAndUpdate(
@@ -104,12 +126,12 @@ app.put("/update/:id", async (req, res) => {
   }
 });
 
-// DELETE
+// Delete
 app.delete("/delete/:id", async (req, res) => {
   try {
     const doc = await Registration.findById(req.params.id);
 
-    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
+    await syncToSheet("delete", {
       type: "delete",
       email: doc.email
     });
@@ -123,24 +145,7 @@ app.delete("/delete/:id", async (req, res) => {
   }
 });
 
-// FULL RESYNC
-app.get("/resync", async (req, res) => {
-  try {
-    const allData = await Registration.find();
-
-    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
-      type: "resync",
-      data: allData
-    });
-
-    res.json({ message: "Sheet fully resynced" });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// TEST ROUTE
+// Test route
 app.get("/", (req, res) => {
   res.send("Server Running");
 });
