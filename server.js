@@ -20,7 +20,7 @@ mongoose.connect(process.env.MONGO_URI)
 // ==========================
 const registrationSchema = new mongoose.Schema({
   name: String,
-  email: { type: String, unique: true },
+  email: { type: String, unique: true, lowercase: true, trim: true },
   projectTitle: String,
   productionDate: String,
   trailerLink: String,
@@ -55,17 +55,21 @@ function startChangeStream() {
     console.log("Change detected:", change.operationType);
 
     if (change.operationType === "insert") {
-      await syncToSheet("insert", {
-        type: "insert",
+      await syncToSheet("upsert", {
+        type: "upsert",
         data: change.fullDocument
       });
     }
 
     if (change.operationType === "update") {
-      await syncToSheet("update", {
-        type: "update",
+      await syncToSheet("upsert", {
+        type: "upsert",
         data: change.fullDocument
       });
+    }
+
+    if (change.operationType === "delete") {
+      await initialResync();
     }
 
   })
@@ -131,9 +135,13 @@ app.delete("/delete/:id", async (req, res) => {
   try {
     const doc = await Registration.findById(req.params.id);
 
+    if (!doc) {
+      return res.status(404).json({ error: "Registration not found" });
+    }
+
     await syncToSheet("delete", {
       type: "delete",
-      email: doc.email
+      email: (doc.email || "").toLowerCase().trim()
     });
 
     await Registration.findByIdAndDelete(req.params.id);

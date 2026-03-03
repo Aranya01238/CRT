@@ -1,4 +1,4 @@
-# MongoDB Auto Sync Backend (Every 3 Seconds)
+# MongoDB Auto Sync Backend
 
 ## Setup
 
@@ -8,5 +8,13 @@
 4. npm start
 
 This server:
+
 - Saves registrations to MongoDB
-- Automatically syncs entire database to Google Sheets every 3 seconds
+- Automatically syncs to Google Sheets on create/update/delete via MongoDB change streams
+- Runs one full resync on startup (`type: "resync"`)
+
+Google Apps Script webhook payloads used:
+
+- `type: "resync"` with `data: []`
+- `type: "upsert"` with `data: { ...registration }`
+- `type: "delete"` with `email: "..."`
