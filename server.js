@@ -8,12 +8,19 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// ===============================
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.error("MongoDB Error:", err));
+// ===============================
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.error("MongoDB Error:", err));
 
+// ===============================
 // Schema
+// ===============================
 const registrationSchema = new mongoose.Schema({
   name: String,
   email: { type: String, unique: true },
@@ -28,36 +35,56 @@ const registrationSchema = new mongoose.Schema({
 
 const Registration = mongoose.model("Registration", registrationSchema);
 
-// 🔥 Change Stream (Real-time sync)
-Registration.watch().on("change", async (change) => {
+// ===============================
+// GOOGLE SHEET SYNC FUNCTION
+// ===============================
+async function syncToSheet(type, data) {
   try {
+    await axios.post(process.env.GOOGLE_SCRIPT_URL, {
+      type,
+      data
+    });
+    console.log("Synced:", type);
+  } catch (err) {
+    console.error("Sheet Sync Error:", err.message);
+  }
+}
+
+// ===============================
+// CHANGE STREAM (AUTO UPDATE)
+// ===============================
+function startChangeStream() {
+  Registration.watch([], { fullDocument: "updateLookup" })
+  .on("change", async (change) => {
+
+    console.log("Change detected:", change.operationType);
 
     if (change.operationType === "insert") {
-      await axios.post(process.env.GOOGLE_SCRIPT_URL, {
-        type: "insert",
-        data: change.fullDocument
-      });
+      await syncToSheet("insert", change.fullDocument);
     }
 
-    else if (change.operationType === "update") {
-      const updatedDoc = await Registration.findById(change.documentKey._id);
-
-      await axios.post(process.env.GOOGLE_SCRIPT_URL, {
-        type: "update",
-        data: updatedDoc
-      });
+    if (change.operationType === "update") {
+      await syncToSheet("update", change.fullDocument);
     }
 
-  } catch (err) {
-    console.error("Sync error:", err.message);
-  }
-});
+  })
+  .on("error", (err) => {
+    console.error("Change Stream Error:", err);
+    setTimeout(startChangeStream, 5000); // Auto-reconnect
+  });
+}
+
+startChangeStream();
+
+// ===============================
+// ROUTES
+// ===============================
 
 // CREATE
 app.post("/register", async (req, res) => {
   try {
-    const registration = await Registration.create(req.body);
-    res.json(registration);
+    const doc = await Registration.create(req.body);
+    res.json(doc);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -77,7 +104,7 @@ app.put("/update/:id", async (req, res) => {
   }
 });
 
-// DELETE (important: send email before deletion)
+// DELETE
 app.delete("/delete/:id", async (req, res) => {
   try {
     const doc = await Registration.findById(req.params.id);
@@ -96,7 +123,7 @@ app.delete("/delete/:id", async (req, res) => {
   }
 });
 
-// 🔄 FULL RESYNC
+// FULL RESYNC
 app.get("/resync", async (req, res) => {
   try {
     const allData = await Registration.find();
@@ -111,6 +138,11 @@ app.get("/resync", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// TEST ROUTE
+app.get("/", (req, res) => {
+  res.send("Server Running");
 });
 
 const PORT = process.env.PORT || 5000;
